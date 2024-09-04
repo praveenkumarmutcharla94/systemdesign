@@ -6,10 +6,11 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestTemplate;
 
 import java.lang.reflect.Array;
-import java.util.Arrays;
-import java.util.List;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 
 @RestController
@@ -19,6 +20,11 @@ public class LoadBalancerController {
     private final AtomicInteger roundRobinIndex = new AtomicInteger(0);
     private final Random random = new Random();
     private final ConcurrentHashMap<String, AtomicInteger> connections = new ConcurrentHashMap<>();
+    private final NavigableMap<Integer, String> hashCircle = new TreeMap<>();
+
+    public LoadBalancerController() throws NoSuchAlgorithmException {
+        initializeHashCircle();
+    }
 
     // List of backend server URLs
     private final List<String> backendServers = Arrays.asList(
@@ -30,12 +36,63 @@ public class LoadBalancerController {
 
     @GetMapping("/process")
     public String processRequest() {
-        // Choose the algorithm here (Round Robin, Random, Least Connections)
-        String backendServer = selectBackendServerRoundRobin();
-        // String backendServer = selectBackendServerRandom();
-        // String backendServer = selectBackendServerLeastConnections();
+        // Use a dynamic key for consistent hashing
+        String key = "request-id-" + UUID.randomUUID(); // Example of using a unique key
+        String backendServer = selectBackendServerConsistentHashing(key);
 
-        return restTemplate.getForObject(backendServer, String.class);
+        System.out.println("Selected backend server: " + backendServer);
+
+        try {
+            String response = restTemplate.getForObject(backendServer, String.class);
+            System.out.println("Response received: " + response);
+            return response;
+        } catch (Exception e) {
+            System.err.println("Failed to connect to backend server: " + e.getMessage());
+            return "Error: Unable to process request.";
+        }
+    }
+
+
+    private void initializeHashCircle() throws NoSuchAlgorithmException {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+
+        for (String server : backendServers) {
+            for (int i = 0; i < 10; i++) { // Adding virtual nodes for better distribution
+                int hash = hashFunction(md, server + "#" + i);
+                hashCircle.put(hash, server);
+            }
+        }
+
+        hashCircle.forEach((hash, server) -> {
+            System.out.println("Hash: " + hash + ", Server: " + server);
+        });
+    }
+
+    private int hashFunction(MessageDigest md, String key) {
+        byte[] digest = md.digest(key.getBytes(StandardCharsets.UTF_8));
+        return Math.abs(Arrays.hashCode(digest)); // Convert digest to integer hash
+    }
+
+    private String selectBackendServerConsistentHashing(String key) {
+        if (hashCircle.isEmpty()) {
+            throw new IllegalStateException("Hash circle is empty. No backend servers available.");
+        }
+
+        MessageDigest md;
+        try {
+            md = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("Hashing algorithm not found", e);
+        }
+
+        int hash = hashFunction(md, key);
+        Map.Entry<Integer, String> entry = hashCircle.ceilingEntry(hash);
+
+        if (entry == null) {
+            entry = hashCircle.firstEntry(); // Wrap around the circle if no entry is found
+        }
+
+        return entry.getValue();
     }
 
     private String selectBackendServerRoundRobin() {

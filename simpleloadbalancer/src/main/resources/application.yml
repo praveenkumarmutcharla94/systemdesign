@@ -1,0 +1,11 @@
+server:
+  tomcat:
+    connection-timeout: 20000
+    max-connections: 10000
+    max-threads: 200
+    acceptor-thread-count: 2
+    processor-cache: 500
+    use-relative-redirects: true
+    protocol: org.apache.coyote.http11.Http11NioProtocol
+    # You can try disabling soLinger or setting it to -1
+    so-linger: -1
